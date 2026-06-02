@@ -35,9 +35,19 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
         run: |
           set -euo pipefail
+          if [ -z "${SSH_HOST:-}" ]; then
+            echo "SSH_HOST secret is required"
+            exit 1
+          fi
+          if [ -z "${SSH_PRIVATE_KEY:-}" ]; then
+            echo "SSH_PRIVATE_KEY secret is required"
+            exit 1
+          fi
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          # Secrets may include CRLF; OpenSSH key parser can fail on \r.
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
           if [ -n "${SSH_PORT:-}" ]; then
@@ -46,7 +56,8 @@ jobs:
             PORT_OPT=""
           fi
 
-          ssh-keyscan $PORT_OPT -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          # If keyscan is blocked, allow deploy step to proceed with accept-new.
+          ssh-keyscan $PORT_OPT -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy dist/ via rsync
         env:
@@ -63,9 +74,9 @@ jobs:
           fi
 
           if [ -n "${SSH_PORT:-}" ]; then
-            RSYNC_SSH="ssh -p ${SSH_PORT}"
+            RSYNC_SSH="ssh -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts"
           else
-            RSYNC_SSH="ssh"
+            RSYNC_SSH="ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.ssh/known_hosts"
           fi
 
           rsync -az --delete -e "$RSYNC_SSH" dist/ "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/"
