@@ -1,0 +1,71 @@
+name: Deploy (rsync)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          if [ -n "${SSH_PORT:-}" ]; then
+            PORT_OPT="-p ${SSH_PORT}"
+          else
+            PORT_OPT=""
+          fi
+
+          ssh-keyscan $PORT_OPT -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy dist/ via rsync
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEPLOY_PATH:-}" ]; then
+            echo "DEPLOY_PATH secret is required"
+            exit 1
+          fi
+
+          if [ -n "${SSH_PORT:-}" ]; then
+            RSYNC_SSH="ssh -p ${SSH_PORT}"
+          else
+            RSYNC_SSH="ssh"
+          fi
+
+          rsync -az --delete -e "$RSYNC_SSH" dist/ "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/"
